@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Transcript Summarizer</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1a1a1a; }
+  @media (prefers-color-scheme: dark) { body { background: #14161a; color: #e8e8e8; } }
+  main { max-width: 900px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { opacity: .7; margin: 0 0 24px; font-size: 13px; }
+  .card { background: canvas; border: 1px solid color-mix(in srgb, canvasText 15%, transparent);
+          border-radius: 12px; padding: 20px; margin-bottom: 18px; }
+  #drop { border: 2px dashed color-mix(in srgb, canvasText 30%, transparent); border-radius: 12px;
+          padding: 34px 16px; text-align: center; cursor: pointer; transition: .15s; }
+  #drop.over { border-color: #3b82f6; background: color-mix(in srgb, #3b82f6 12%, transparent); }
+  #drop p { margin: 6px 0; }
+  .or { text-align: center; opacity: .6; margin: 14px 0; font-size: 13px; }
+  input[type=text] { width: 100%; padding: 10px 12px; border-radius: 8px;
+          border: 1px solid color-mix(in srgb, canvasText 25%, transparent); background: canvas; color: canvasText; }
+  button { margin-top: 14px; padding: 10px 20px; font-size: 15px; border: 0; border-radius: 8px;
+          background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { height: 10px; border-radius: 6px; background: color-mix(in srgb, canvasText 15%, transparent); overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0; background: #2563eb; transition: width .3s; }
+  .stage { font-size: 13px; opacity: .8; margin: 8px 0 2px; }
+  .err { color: #dc2626; white-space: pre-wrap; }
+  pre { white-space: pre-wrap; word-wrap: break-word; background: color-mix(in srgb, canvasText 6%, transparent);
+        padding: 14px; border-radius: 8px; font: 13px/1.5 ui-monospace, monospace; max-height: 460px; overflow: auto; }
+  .summary h2 { font-size: 16px; margin: 18px 0 6px; border-bottom: 1px solid color-mix(in srgb, canvasText 15%, transparent); padding-bottom: 3px; }
+  .summary ul { margin: 6px 0 6px 4px; padding-left: 20px; }
+  .summary li { margin: 3px 0; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+  .row a { font-size: 13px; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-weight: 600; }
+  .hint { font-size: 12px; opacity: .65; margin-top: 6px; }
+  .dlbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .dlbar label { font-size: 13px; font-weight: 600; }
+  .dlbar select { flex: 1; min-width: 220px; padding: 8px 10px; border-radius: 8px;
+          border: 1px solid color-mix(in srgb, canvasText 25%, transparent); background: canvas; color: canvasText; }
+  .dlbar button { margin: 0; padding: 8px 16px; }
+  h2.fh { font-size: 16px; margin: 20px 0 8px; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .frames figure { margin: 0; }
+  .frames img { width: 100%; border-radius: 6px; display: block; cursor: zoom-in;
+          background: color-mix(in srgb, canvasText 8%, transparent); }
+  .frames figcaption { font-size: 11px; opacity: .7; text-align: center; margin-top: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Video Transcript Summarizer</h1>
+  <p class="sub">No account, no external AI API &mdash; transcription and summarizing run with Whisper &ldquo;{{ whisper }}&rdquo; and a local TextRank algorithm.
+    Upload limit {{ max_gb }} GB{% if max_minutes %}, {{ max_minutes }} minutes per file{% endif %}.</p>
+
+  <div class="card" id="inputCard">
+    <div id="drop">
+      <p><strong>Drop a video or audio file here</strong></p>
+      <p>or click to choose &nbsp;&middot;&nbsp; mp4, mkv, mov, webm, mp3, wav, m4a</p>
+      <p id="picked" class="hint"></p>
+      <input type="file" id="file" hidden accept="video/*,audio/*">
+    </div>
+    {% if local_path_enabled %}
+    <p class="or">&mdash; or, for large files, point at a path on this computer &mdash;</p>
+    <input type="text" id="path" placeholder="D:\videos\meeting.mp4">
+    <p class="hint">Using a local path skips the upload entirely &mdash; best for multi-GB files.</p>
+    {% endif %}
+    <button id="go">Transcribe &amp; summarize</button>
+  </div>
+
+  <div class="card" id="progCard" hidden>
+    <div class="stage" id="stageLabel">Starting&hellip;</div>
+    <div class="bar"><span id="barFill"></span></div>
+    <div class="stage" id="msgLabel"></div>
+    <div class="err" id="errLabel"></div>
+  </div>
+
+  <div class="card" id="outCard" hidden>
+    <div class="dlbar">
+      <label for="fmt">Download</label>
+      <select id="fmt">
+        <option value="document">Full document (.html) &mdash; summary + snapshots + transcript</option>
+        <option value="pdf">PDF (.pdf) &mdash; summary + snapshots + transcript</option>
+        <option value="docx">Word document (.docx) &mdash; summary + snapshots + transcript</option>
+        <option value="zip">Everything (.zip) &mdash; every format + frames</option>
+        <option value="summary">Summary only (.md)</option>
+        <option value="transcript">Transcript only (.txt)</option>
+      </select>
+      <button id="dlGo" type="button">Download</button>
+    </div>
+
+    <div class="summary" id="summary"></div>
+
+    <div id="framesWrap" hidden>
+      <h2 class="fh">Snapshots</h2>
+      <div class="frames" id="frames"></div>
+    </div>
+
+    <details>
+      <summary>Full transcript</summary>
+      <pre id="transcript"></pre>
+    </details>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let chosenFile = null;
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => {
+  chosenFile = e.target.files[0] || null;
+  $("picked").textContent = chosenFile ? "Selected: " + chosenFile.name : "";
+});
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", (e) => {
+  chosenFile = e.dataTransfer.files[0] || null;
+  $("picked").textContent = chosenFile ? "Selected: " + chosenFile.name : "";
+});
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Tiny Markdown renderer: headings, bullet lists, bold, paragraphs.
+function renderMd(md) {
+  const lines = esc(md).split("\n");
+  let html = "", inList = false;
+  for (let raw of lines) {
+    const line = raw.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    const b = line.match(/^\s*[-*]\s+(.*)$/);
+    if (h) {
+      if (inList) { html += "</ul>"; inList = false; }
+      const lvl = Math.min(h[1].length + 1, 4);
+      html += `<h${lvl}>${h[2]}</h${lvl}>`;
+    } else if (b) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${b[1]}</li>`;
+    } else if (line.trim() === "") {
+      if (inList) { html += "</ul>"; inList = false; }
+    } else {
+      if (inList) { html += "</ul>"; inList = false; }
+      html += `<p>${line}</p>`;
+    }
+  }
+  if (inList) html += "</ul>";
+  return html;
+}
+
+let pollTimer = null;
+
+function setProgress(stage, frac, msg) {
+  $("progCard").hidden = false;
+  const names = { upload: "Uploading", snapshots: "1 / 4  Sampling frames",
+                  moderation: "2 / 4  Checking content", transcribe: "3 / 4  Transcribing (local)",
+                  summarize: "4 / 4  Summarizing (local)", done: "Done" };
+  $("stageLabel").textContent = names[stage] || stage || "Working";
+  $("barFill").style.width = Math.round((frac || 0) * 100) + "%";
+  $("msgLabel").textContent = msg || "";
+}
+
+function fail(msg) {
+  $("errLabel").textContent = msg;
+  $("go").disabled = false;
+}
+
+function poll(jid) {
+  fetch(`/status/${jid}`).then(r => r.json()).then(s => {
+    if (s.state === "error") { clearInterval(pollTimer); return fail(s.message || s.error); }
+    setProgress(s.stage, s.progress, s.message);
+    if (s.state === "done") {
+      clearInterval(pollTimer);
+      fetch(`/result/${jid}`).then(r => r.json()).then(res => {
+        $("outCard").hidden = false;
+        $("summary").innerHTML = renderMd(res.summary || "");
+        $("transcript").textContent = res.transcript || "(no speech detected)";
+
+        const shots = res.snapshots || [];
+        const wrap = $("framesWrap"), grid = $("frames");
+        grid.innerHTML = "";
+        if (shots.length) {
+          for (const s of shots) {
+            const fig = document.createElement("figure");
+            const img = document.createElement("img");
+            img.src = `/snapshot/${jid}/${s.name}`;
+            img.alt = "frame at " + s.hms;
+            img.addEventListener("click", () => window.open(img.src, "_blank"));
+            const cap = document.createElement("figcaption");
+            cap.textContent = s.hms;
+            fig.append(img, cap);
+            grid.appendChild(fig);
+          }
+          wrap.hidden = false;
+        } else {
+          wrap.hidden = true;
+        }
+
+        $("dlGo").onclick = () => {
+          window.location = `/download/${jid}/${$("fmt").value}`;
+        };
+        $("stageLabel").textContent = "Done";
+        $("go").disabled = false;
+      });
+    }
+  }).catch(e => { clearInterval(pollTimer); fail(String(e)); });
+}
+
+$("go").addEventListener("click", () => {
+  const pathEl = $("path");
+  const path = pathEl ? pathEl.value.trim() : "";
+  if (!path && !chosenFile) { fail(pathEl ? "Choose a file or enter a local path first." : "Choose a file first."); return; }
+
+  $("go").disabled = true;
+  $("errLabel").textContent = "";
+  $("outCard").hidden = true;
+  setProgress(path ? "transcribe" : "upload", 0, path ? "Queued" : "Uploading 0%");
+
+  const fd = new FormData();
+  if (path) fd.append("local_path", path);
+  else fd.append("file", chosenFile);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/process");
+  xhr.upload.onprogress = (e) => {
+    if (!path && e.lengthComputable) {
+      const p = e.loaded / e.total;
+      $("stageLabel").textContent = "Uploading";
+      $("barFill").style.width = Math.round(p * 100) + "%";
+      $("msgLabel").textContent = `Uploading ${(p * 100).toFixed(0)}%`;
+    }
+  };
+  xhr.onload = () => {
+    let data = {};
+    try { data = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status >= 400) return fail(data.error || `Server error ${xhr.status}`);
+    setProgress("transcribe", 0, "Queued");
+    pollTimer = setInterval(() => poll(data.job_id), 1500);
+  };
+  xhr.onerror = () => fail("Upload failed (network error).");
+  xhr.send(fd);
+});
+</script>
+</body>
+</html>

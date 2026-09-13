@@ -1,0 +1,39 @@
+# Render Blueprint - deploy with: connect this repo at dashboard.render.com,
+# or `render blueprint launch` via the Render CLI. See DEPLOY.md for the
+# full step-by-step (account creation, GitHub push, first deploy).
+services:
+  - type: web
+    name: video-transcript-summarizer
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PUBLIC_MODE
+        value: "true"
+      # Free-tier sizing: small CPU/RAM, so keep uploads and video length
+      # modest. Raise these once you're on a paid instance with more RAM/CPU.
+      - key: MAX_UPLOAD_BYTES
+        value: "314572800"    # 300 MB
+      - key: MAX_VIDEO_SECONDS
+        value: "1200"          # 20 minutes
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: RATE_LIMIT_PER_HOUR
+        value: "6"
+      - key: WHISPER_MODEL
+        value: "base"
+      - key: WHISPER_DEVICE
+        value: "cpu"
+      - key: WHISPER_COMPUTE_TYPE
+        value: "int8"
+      - key: WHISPER_BEAM_SIZE
+        value: "1"
+      - key: SNAPSHOT_COUNT
+        value: "8"
+      - key: MODERATION_ENABLED
+        value: "true"
+# NOTE: Render's free plan has no persistent disk. outputs/ and uploads/ are
+# wiped on every restart/redeploy/sleep-wake cycle - downloads only exist for
+# the lifetime of that container run. This is fine for a demo/free tier; if
+# you need durable storage, upgrade the plan and add a `disk:` block, or
+# switch outputs to an object-storage bucket.
